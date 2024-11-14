@@ -1,0 +1,194 @@
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
+import torch
+import torch.nn as nn
+from PIL import Image
+import numpy as np
+import cv2
+import logging
+
+
+# Replace with your actual YOLOv8 model definition and class names
+class YOLOv8(nn.Module):
+    # ... (Define your YOLOv8 model architecture here)
+    def __init__(self):
+        super(YOLOv8, self).__init__()
+
+    def forward(self, x):
+        # ... (Implement the forward pass logic)
+        return x  # Replace with actual output (bounding boxes, labels)
+
+def load_model():
+    model = YOLOv8()  # Replace with your model loading logic
+    try:
+        state_dict = torch.load('best.pt')
+        model_dict = {k: v for k, v in state_dict.items() if k in model.state_dict()}
+        model.load_state_dict(model_dict)
+    except FileNotFoundError:
+        print("Error: Model file 'best.pt' not found!")
+    except RuntimeError as e:
+        print(f"Error loading model: {e}")
+    model.eval()  # Set model to evaluation mode
+    return model
+
+
+model = load_model()  # Load the model globally
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in {'png', 'jpg', 'jpeg'}
+
+def plot_bboxes(results, frame):
+    for result in results:
+        boxes = result.boxes.xyxy.cpu().numpy()
+
+        for box in boxes:
+            # Convert the coordinates to integers
+            box = box.astype(int)
+
+            # Draw rectangle on the frame
+            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
+
+    return frame
+
+app = Flask(__name__)
+logging.basicConfig(level=logging.ERROR)
+
+ALLOWED_EXTENSIONS = set(['png', 'jpg', 'jpeg'])
+
+@app.route('/ping')
+def ping():
+    return jsonify({'message': 'Backend is alive!'})
+
+@app.route('/detect', methods=['POST'])
+def detect_objects():
+    try:
+        # Check if the request has a file part
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image uploaded'}), 400
+
+        file = request.files['image']
+        
+        # Check if the file is allowed
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+        if file and not allowed_file(file.filename):
+            return jsonify({'error': 'Unsupported file format'}), 400
+
+        # Secure the filename
+        filename = secure_filename(file.filename)
+        
+        # Save the image
+        image_path = f'uploads/{filename}'
+        file.save(image_path)
+        
+        # Preprocess image (resize, etc.)
+        image = Image.open(image_path).convert('RGB')
+
+        # Convert image to tensor
+        # image_tensor = torch.from_numpy(np.array(image)).float() / 255.0  # Normalize
+        # image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)  # Add batch dimension
+
+        with torch.no_grad():
+            # Perform model inference
+            detections = model(image_path)
+            print(detections)
+
+        # Process detections (get bounding boxes, labels, etc.)
+        results = {
+            'bounding_boxes': [],
+            'labels': []
+        }
+        for result in detections:  
+            boxes = result.boxes.xyxy.cpu().numpy()  
+
+            for box in boxes:
+                # Convert bounding box coordinates to integers
+                box = box.astype(int)
+
+                # Extract label (assuming a separate 'label' field in detections)
+                label = result.label  # Replace with actual label access logic
+
+                # Append bounding box and label to results
+                results['bounding_boxes'].append(box.tolist())
+                results['labels'].append(label.tolist())
+                
+        print(results)
+        return jsonify(results)
+
+    except Exception as e:
+        print(f"Error during processing: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+# @app.route('/detect', methods=['POST'])
+# def detect_objects():
+#     try:
+#         # Check if the request has a file part
+#         if 'image' not in request.files:
+#             return jsonify({'error': 'No image uploaded'}), 400
+
+#         file = request.files['image']
+        
+#         # Check if the file is allowed
+#         if file.filename == '':
+#             return jsonify({'error': 'No selected file'}), 400
+#         if file and not allowed_file(file.filename):
+#             return jsonify({'error': 'Unsupported file format'}), 400
+
+#         # Secure the filename
+#         filename = secure_filename(file.filename)
+        
+#         # Save the image
+#         image_path = f'uploads/{filename}'
+#         file.save(image_path)
+        
+#         # Preprocess image (resize, etc.)
+#         image = Image.open(image_path).convert('RGB')
+
+#         frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+#         # Convert image to tensor
+#         image_tensor = torch.from_numpy(np.array(image)).float() / 255.0  # Normalize
+#         image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)  # Add batch dimension
+
+#         with torch.no_grad():
+#             # ... (Replace with your model inference logic)
+#             try:
+#                 detections = model(image_tensor)  # Replace with actual detections output
+#             except Exception as e:
+#                 print(f"Error during model inference: {e}")
+#                 return jsonify({'error': 'Internal server error dectionwala'}), 500
+
+#         # Process detections (get bounding boxes, labels, etc.)
+#         # ... (Replace with your logic to extract relevant information from detections)
+#         results = {  # Example structure for results
+#             'bounding_boxes': [],
+#             'labels': []
+#         }
+#         for result in detections:  # Assuming detections is iterable
+#                 boxes = result.boxes.xyxy.cpu().numpy()  # Assuming detections format
+
+#                 for box in boxes:
+#                     # Convert bounding box coordinates to integers
+#                     box = box.astype(int)
+
+#                     # Extract label (assuming a separate 'label' field in detections)
+#                     label = result.label  # Replace with actual label access logic
+
+#                     # Append bounding box and label to results
+#                     results['bounding_boxes'].append(box.tolist())
+#                     results['labels'].append(label.tolist())  # Convert to list
+
+#         # Visualize bounding boxes on the frame
+#         frame = plot_bboxes(results, frame)
+
+#         # ... (Return the results or encoded frame, depending on your needs)
+#         return jsonify(frame)  # Return the processed results
+
+#     except Exception as e:
+#         print(f"Error during processing: {e}")
+#         return jsonify({'error': 'Internal server error Endwala' }), 500
+
+
+if __name__ == '__main__':
+    app.run(debug=True,port=8000)
